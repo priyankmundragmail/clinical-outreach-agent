@@ -22,39 +22,39 @@ sequenceDiagram
         
         alt LLM Error
             ExceptionHandler->>+Logger: handle_llm_call_error()
-            Logger->>+User: print_error("LLM call failed...")
-            Logger->>+User: print_error("Error type: ...")
-            Logger->>+User: print_error("Full traceback...")
+            Logger->>+User: print_error("LLM call failed")
+            Logger->>+User: print_error("Error type details")
+            Logger->>+User: print_error("Full traceback")
             User-->>-Logger: error_displayed
             Logger-->>-ExceptionHandler: logged
             ExceptionHandler-->>-SafeDecorator: LLMCallError raised
         else Tool Error
             ExceptionHandler->>+Logger: handle_tool_execution_error()
             Logger->>+User: print_tool_error(tool_name, error, args)
-            Logger->>+User: print("❌ Tool 'X' failed: ...")
-            Logger->>+User: print("   Error type: ...")
-            Logger->>+User: print("📋 Full traceback...")
+            Logger->>+User: print("Tool failed message")
+            Logger->>+User: print("Error type details")
+            Logger->>+User: print("Full traceback")
             User-->>-Logger: error_displayed
             Logger-->>-ExceptionHandler: logged
             ExceptionHandler-->>-SafeDecorator: error_message_string
         else Graph Build Error
             ExceptionHandler->>+Logger: handle_graph_build_error()
-            Logger->>+User: print_error("Graph build failed...")
-            Logger->>+User: print_info("Attempting fallback...")
+            Logger->>+User: print_error("Graph build failed")
+            Logger->>+User: print_info("Attempting fallback")
             User-->>-Logger: error_displayed
             Logger-->>-ExceptionHandler: logged
             ExceptionHandler-->>-SafeDecorator: GraphBuildError raised
         else Import Error
             ExceptionHandler->>+Logger: handle_import_error()
-            Logger->>+User: print_error("Import error: ...")
-            Logger->>+User: print_info("Install suggestion: ...")
+            Logger->>+User: print_error("Import error message")
+            Logger->>+User: print_info("Install suggestion")
             User-->>-Logger: error_displayed
             Logger-->>-ExceptionHandler: logged
             ExceptionHandler->>+Component: sys.exit(1)
         else General Error
             ExceptionHandler->>+Logger: handle_general_exception()
-            Logger->>+User: print_error("Unexpected error: ...")
-            Logger->>+User: print_error("Full traceback...")
+            Logger->>+User: print_error("Unexpected error")
+            Logger->>+User: print_error("Full traceback")
             User-->>-Logger: error_displayed
             Logger-->>-ExceptionHandler: logged
             ExceptionHandler->>+Component: sys.exit(1)
