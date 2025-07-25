@@ -31,10 +31,10 @@ sequenceDiagram
             SafeExec->>+FireRem: fire_reminder(**args)
             
             alt Successful execution
-                FireRem->>+FireRem: print("🔔 Firing reminder...")
-                FireRem->>+FireRem: print("   Type: ...", "Priority: ...")
-                FireRem->>+FireRem: result = f"Reminder sent to Patient {id}"
-                FireRem->>+FireRem: print("✅ {result}")
+                FireRem->>FireRem: print("🔔 Firing reminder...")
+                FireRem->>FireRem: print("Type and Priority info")
+                FireRem->>FireRem: create result message
+                FireRem->>FireRem: print("✅ success message")
                 FireRem-->>-SafeExec: result_string
                 SafeExec-->>-ToolNode: (True, result)
                 ToolNode->>+Logger: print_tool_result(tool_name, result, time)
@@ -48,17 +48,16 @@ sequenceDiagram
             end
             
         else Tool not found
-            ToolNode->>+Logger: print_error(f"Tool '{tool_name}' not found")
+            ToolNode->>+Logger: print_error("Tool not found")
             Logger-->>-ToolNode: ✅
         end
         
-        ToolNode->>+ToolNode: create ToolMessage(content, tool_call_id)
+        ToolNode->>ToolNode: create ToolMessage(content, tool_call_id)
     end
     
     ToolNode->>+Logger: print_workflow_complete(message_count)
     Logger-->>-ToolNode: ✅
-    ToolNode-->>-LLM: {"messages": [tool_messages]}
-```
+    ToolNode-->>-LLM: return tool_messages
 
 ## Tool Execution Steps:
 1. **Discovery**: Find tool function by name
@@ -66,3 +65,4 @@ sequenceDiagram
 3. **Logging**: Comprehensive execution logging
 4. **Results**: Format and return results
 5. **Errors**: Graceful error handling and reporting
+````
