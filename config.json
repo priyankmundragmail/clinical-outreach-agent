@@ -1,0 +1,40 @@
+{
+  "profile": {
+    "name": "Clinical Outreach Agent",
+    "icon": "🧠",
+    "use_for_new_windows": true
+  },
+  "folders": [
+    {
+      "host": "Local",
+      "path": "/Users/prmundr/Github/clinical-outreach-agent"
+    }
+  ],
+  "threads": [
+    {
+      "name": "🧭 Agent Planning",
+      "files": ["README.md", "agent_spec.md"],
+      "description": "Plan agent scope, persona, and logic"
+    },
+    {
+      "name": "🧩 Graph Workflow",
+      "files": ["graph.py", "state.py"],
+      "description": "Define LangGraph structure and transitions"
+    },
+    {
+      "name": "🔧 Tool Functions",
+      "files": ["tools/patient_lookup.py", "tools/outreach_check.py"],
+      "description": "Add tools for querying and decision logic"
+    },
+    {
+      "name": "💾 Memory & Checkpointing",
+      "files": ["memory.py", "db.sqlite", "config/memory_config.yaml"],
+      "description": "Configure state persistence and SQLite saver"
+    },
+    {
+      "name": "🧪 Tests & Examples",
+      "files": ["test_agent.py", "examples/demo_thread.py"],
+      "description": "Use and evaluate agent in test flows"
+    }
+  ]
+}

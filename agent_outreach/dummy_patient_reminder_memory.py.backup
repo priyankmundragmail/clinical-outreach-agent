@@ -1,0 +1,298 @@
+"""
+Clinical Outreach Agent Graph Module
+
+This module defines the LangGraph workflow for clinical patient outreach automation.
+It orchestrates the process of finding unmet patient needs and sending reminders.
+"""
+
+from dotenv import load_dotenv
+from langgraph.graph import StateGraph, END, START
+from langgraph.checkpoint.memory import MemorySaver
+from langchain_core.messages import HumanMessage, ToolMessage, AIMessage, SystemMessage
+from langchain_openai import ChatOpenAI
+from langchain_core.tools import StructuredTool
+from langgraph.prebuilt import tools_condition, ToolNode
+from langgraph.graph import MessagesState
+import sys
+import os
+import time
+
+# Add parent directory to Python path
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from agent_outreach.state import OutreachState
+from agent_outreach.tools.find_unmet_patients import find_unmet_patients, FindUnmetPatientsInput
+from agent_outreach.tools.fire_reminder import fire_reminder, FireReminderInput
+from agent_outreach.tools.access_patient_data import get_all_patients, find_patient
+from agent_outreach.tools.cohort_tools import get_all_cohorts, get_cohort_info, get_cohort_summary
+from agent_outreach.utils.logging_utils import WorkflowLogger, ProgressTracker
+from agent_outreach.utils.exception_handler import (
+    ExceptionHandler, 
+    safe_execute, 
+    safe_tool_execution, 
+    WorkflowContext,
+    LLMCallError,
+    GraphBuildError
+)
+
+# Load environment variables
+load_dotenv()
+
+# Initialize the language model
+llm = ChatOpenAI(model="gpt-3.5-turbo", timeout=30, max_retries=2)
+
+# Define tools
+tools = [
+    StructuredTool.from_function(func=fire_reminder, name="fire_reminder", description="Send a reminder to a specific patient.", args_schema=FireReminderInput),
+    StructuredTool.from_function(func=get_all_patients, name="get_all_patients", description="Get complete list of all patients for analysis and cohort classification."),
+    StructuredTool.from_function(func=find_patient, name="find_patient", description="Find a specific patient by their ID for detailed information."),
+    StructuredTool.from_function(func=get_all_cohorts, name="get_all_cohorts", description="Get complete list of all available cohorts with their definitions and criteria."),
+    StructuredTool.from_function(func=get_cohort_info, name="get_cohort_info", description="Get detailed information about a specific cohort including classification and intervention criteria."),
+    StructuredTool.from_function(func=get_cohort_summary, name="get_cohort_summary", description="Generate a summary overview of all available cohorts for quick reference.")
+]
+
+llm_with_tools = llm.bind_tools(tools)
+
+@safe_execute("LLM call")
+def call_llm(state):
+    """Call the LLM with explicit reasoning requirement."""
+    WorkflowLogger.print_info("Calling LLM with reasoning...")
+    
+    # Add reasoning requirement to system message
+    reasoning_prompt = """IMPORTANT: Before making any decisions or tool calls, you must:
+1. EXPLAIN YOUR REASONING step by step
+2. SHOW YOUR ANALYSIS of each patient's data
+3. JUSTIFY why you classify each patient into specific cohorts
+4. TRACE your decision-making process
+
+Format your response as:
+REASONING:
+- Patient Analysis: [explain what you see in the data]
+- Cohort Classification: [explain why this patient belongs to X cohort]
+- Intervention Decision: [explain why this intervention is needed]
+- Tool Selection: [explain which tools you'll use and why]
+
+ACTIONS:
+[Then proceed with tool calls]"""
+    
+    # Enhance messages with reasoning prompt
+    enhanced_messages = []
+    for msg in state["messages"]:
+        if isinstance(msg, SystemMessage):
+            enhanced_content = msg.content + "\n\n" + reasoning_prompt
+            enhanced_messages.append(SystemMessage(content=enhanced_content))
+        else:
+            enhanced_messages.append(msg)
+    
+    try:
+        WorkflowLogger.print_info("Sending request to OpenAI...")
+        response = llm_with_tools.invoke(enhanced_messages)
+        WorkflowLogger.print_success("Received response from OpenAI")
+        
+        # Display LLM reasoning
+        WorkflowLogger.print_llm_reasoning(response.content)
+        
+        # Analyze tool calls
+        if hasattr(response, 'tool_calls') and response.tool_calls:
+            WorkflowLogger.print_tool_calls(response.tool_calls)
+            
+            # Check for suspicious actions
+            for tool_call in response.tool_calls:
+                if tool_call.get('name') == "fire_reminder":
+                    patient_id = tool_call.get('args', {}).get('patient_id')
+                    reminder_type = tool_call.get('args', {}).get('reminder_type', '')
+                    
+                    if patient_id == 5 and "hba1c" in reminder_type.lower():
+                        WorkflowLogger.print_validation_warning(patient_id, "is cancer screening, not diabetic!")
+                        user_input = input("\n⚠️ Suspicious action detected! Continue? (y/n): ")
+                        if user_input.lower() != 'y':
+                            return {"messages": [AIMessage(content="Action cancelled due to classification concern.")]}
+        else:
+            WorkflowLogger.print_info("LLM provided final response (no tool calls)")
+        
+        return {"messages": [response]}
+        
+    except Exception as e:
+        ExceptionHandler.handle_llm_call_error(e, "reasoning workflow")
+
+@safe_execute("planning")
+def planning_node(state):
+    """Generate execution plan with detailed reasoning requirements."""
+    WorkflowLogger.print_info("Generating detailed execution plan...")
+    
+    planning_prompt = """Create a comprehensive execution plan with reasoning validation.
+    
+    PLANNING REQUIREMENTS:
+    1. Tool Selection: Which specific tools you'll call and why
+    2. Data Analysis: What patient data you need to examine
+    3. Classification Logic: How you'll determine patient cohorts
+    4. Validation Steps: How you'll verify your classifications are correct
+    5. Execution Order: Step-by-step sequence with dependencies
+    
+    Be specific about tool names, parameters, and expected patient classifications."""
+    
+    planning_messages = state["messages"] + [SystemMessage(content=planning_prompt)]
+    
+    try:
+        plan_response = llm.invoke(planning_messages)
+        
+        WorkflowLogger.print_section("📋 DETAILED EXECUTION PLAN:")
+        print(plan_response.content)
+        WorkflowLogger.print_section("")
+        
+        # Validation check
+        if "patient 5" in plan_response.content.lower():
+            WorkflowLogger.print_success("Plan includes Patient 5 validation!")
+        else:
+            WorkflowLogger.print_warning("Plan should mention Patient 5 validation!")
+        
+        return {"messages": state["messages"] + [AIMessage(content=f"ENHANCED PLAN:\n{plan_response.content}")]}
+    
+    except Exception as e:
+        ExceptionHandler.handle_llm_call_error(e, "planning phase")
+
+def enhanced_tool_node(state):
+    """Enhanced tool node with detailed logging and safe execution."""
+    WorkflowLogger.print_section("🛠️ TOOL EXECUTION PHASE")
+    
+    try:
+        last_message = state["messages"][-1]
+        
+        if not hasattr(last_message, 'tool_calls') or not last_message.tool_calls:
+            WorkflowLogger.print_error("No tool calls found in message")
+            return {"messages": []}
+        
+        tool_messages = []
+        
+        for i, tool_call in enumerate(last_message.tool_calls, 1):
+            tool_name = tool_call.get('name', 'Unknown')
+            tool_args = tool_call.get('args', {})
+            tool_id = tool_call.get('id', 'unknown')
+            
+            WorkflowLogger.print_tool_execution(i, tool_name, tool_args)
+            
+            # Find tool function
+            tool_func = None
+            for tool in tools:
+                if tool.name == tool_name:
+                    tool_func = tool.func
+                    break
+            
+            if not tool_func:
+                error_msg = f"Tool '{tool_name}' not found"
+                WorkflowLogger.print_error(error_msg)
+                tool_messages.append(ToolMessage(content=error_msg, tool_call_id=tool_id))
+                continue
+            
+            # Execute tool safely
+            start_time = time.time()
+            WorkflowLogger.print_info(f"Executing {tool_name}...")
+            
+            success, result = safe_tool_execution(tool_name, tool_func, tool_args)
+            execution_time = time.time() - start_time
+            
+            if success:
+                WorkflowLogger.print_tool_result(tool_name, result, execution_time)
+            
+            tool_messages.append(ToolMessage(content=str(result), tool_call_id=tool_id))
+        
+        WorkflowLogger.print_workflow_complete(len(tool_messages))
+        return {"messages": tool_messages}
+        
+    except Exception as e:
+        error_msg = f"Critical error in tool execution: {str(e)}"
+        WorkflowLogger.print_error(error_msg)
+        return {"messages": [ToolMessage(content=error_msg, tool_call_id="error")]}
+
+def create_graph():
+    """Create and configure the clinical outreach graph."""
+    WorkflowLogger.print_info("Building Clinical Outreach Graph with Reasoning...")
+    
+    builder = StateGraph(OutreachState, name="ClinicalOutreachGraph")
+    
+    # Add nodes
+    builder.add_node("planning", planning_node)
+    builder.add_node("llm", call_llm)
+    builder.add_node("tools", enhanced_tool_node)
+    
+    # Add edges
+    builder.add_edge(START, "planning")
+    builder.add_edge("planning", "llm")
+    builder.add_edge("tools", "llm")
+    
+    # Routing logic
+    def routing_with_validation(state):
+        last_message = state["messages"][-1]
+        has_tool_calls = hasattr(last_message, 'tool_calls') and last_message.tool_calls
+        tool_count = len(last_message.tool_calls) if has_tool_calls else 0
+        
+        WorkflowLogger.print_routing_decision(last_message, has_tool_calls, tool_count)
+        return "tools" if has_tool_calls else END
+    
+    builder.add_conditional_edges("llm", routing_with_validation)
+    
+    # Compile graph with safe error handling
+    try:
+        memory = MemorySaver()
+        graph = builder.compile(checkpointer=memory)
+        WorkflowLogger.print_success("Enhanced Graph built successfully with reasoning support!")
+    except Exception as e:
+        try:
+            ExceptionHandler.handle_graph_build_error(e)
+        except GraphBuildError:
+            # Fallback: build without memory
+            WorkflowLogger.print_info("Attempting to build graph without memory...")
+            graph = builder.compile()
+            WorkflowLogger.print_success("Graph built successfully (without memory)!")
+    
+    WorkflowLogger.print_graph_architecture()
+    return graph
+
+if __name__ == "__main__":
+    with WorkflowContext("Clinical Outreach Agent v2.0"):
+        WorkflowLogger.print_header("Clinical Outreach Agent v2.0", "Enhanced with Reasoning & Validation")
+        
+        WorkflowLogger.print_info("Initializing enhanced agent...")
+        app = create_graph()
+        WorkflowLogger.print_success("Enhanced agent ready!")
+        
+        WorkflowLogger.print_info("Starting enhanced clinical outreach workflow...")
+        ProgressTracker.print_progress_steps()
+        
+        thread_id = f"enhanced-test-{int(time.time())}"
+        
+        result = app.invoke({
+            "messages": [
+                SystemMessage(content="""You are an Enhanced Clinical Outreach Agent v2.0 with reasoning validation capabilities.
+
+CRITICAL VALIDATION REQUIREMENTS:
+- Always validate patient cohort assignments against their actual data
+- Only send appropriate reminders based on validated cohorts
+
+Your workflow:
+1. Generate execution plan with validation steps
+2. Get all patients and analyze their data
+3. Get all cohorts to understand classification criteria
+4. Classify each patient correctly based on their actual data
+5. Send appropriate reminders based on validated cohorts
+6. Report any classification discrepancies
+
+Execute with maximum transparency and validation."""),
+                HumanMessage(content="Please start the clinical outreach workflow. Get all patients, analyze their data, classify them into appropriate cohorts, and send reminders to patients who need interventions.")
+            ]
+        }, config={"configurable": {"thread_id": thread_id}})
+        
+        WorkflowLogger.print_section("🎯 WORKFLOW COMPLETED SUCCESSFULLY!")
+        
+        if result and 'messages' in result and result['messages']:
+            print(result['messages'][-1].content)
+            
+            # Check if reminders were fired
+            final_content = result['messages'][-1].content.lower()
+            if 'reminder sent' in final_content or 'fire_reminder' in final_content:
+                WorkflowLogger.print_success("Reminders were fired successfully!")
+            else:
+                WorkflowLogger.print_warning("No reminders appear to have been fired")
+        else:
+            WorkflowLogger.print_warning("No valid result returned from workflow")
+
