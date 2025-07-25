@@ -172,7 +172,7 @@ def safe_tool_execution(tool_name: str, tool_func: Callable, tool_args: Dict) ->
         error_msg = ExceptionHandler.handle_tool_execution_error(tool_name, e, tool_args)
         return False, error_msg
 
-class WorkflowContext:
+class ErrorHandlingContext:
     """Context manager for workflow execution with proper exception handling."""
     
     def __init__(self, workflow_name: str):
@@ -199,5 +199,38 @@ class WorkflowContext:
             return False
         else:
             ExceptionHandler.handle_general_exception(exc_val, self.workflow_name)
+        
+        return False  # Don't suppress exceptions
+
+class ErrorHandlingContext:
+    """Context manager for error handling and exception management during workflow execution."""
+    
+    def __init__(self, operation_name: str):
+        # Track operation name and timing for error context
+        self.operation_name = operation_name
+        self.start_time = None
+    
+    def __enter__(self):
+        # Start timing and log operation begin
+        import time
+        self.start_time = time.time()
+        WorkflowLogger.print_info(f"Starting {self.operation_name}...")
+        return self
+    
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        # Handle completion or exceptions with proper error management
+        if exc_type is None:
+            import time
+            duration = time.time() - self.start_time
+            WorkflowLogger.print_success(f"{self.operation_name} completed successfully in {duration:.2f}s")
+        elif exc_type == KeyboardInterrupt:
+            ExceptionHandler.handle_user_interruption()
+        elif exc_type == ImportError:
+            ExceptionHandler.handle_import_error(exc_val)
+        elif issubclass(exc_type, ClinicalOutreachException):
+            # Already handled by specific exception handlers
+            return False
+        else:
+            ExceptionHandler.handle_general_exception(exc_val, self.operation_name)
         
         return False  # Don't suppress exceptions
