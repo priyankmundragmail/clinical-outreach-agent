@@ -19,7 +19,7 @@ sequenceDiagram
 
     Note over Executor: Initialization Phase
     Executor->>+Logger: print_header("Clinical Outreach Agent v2.0")
-    Logger-->>-Executor: ✅ Header displayed
+    Logger-->>-Executor: Header displayed
     
     Executor->>+Executor: initialize()
     Executor->>+GraphBuilder: GraphBuilder()
@@ -31,7 +31,7 @@ sequenceDiagram
     
     Executor->>+GraphBuilder: create_graph()
     GraphBuilder->>+Logger: print_info("Building Graph...")
-    Logger-->>-GraphBuilder: ✅
+    Logger-->>-GraphBuilder: success
     GraphBuilder-->>-Executor: compiled_graph
     
     Note over Executor: Execution Phase
@@ -45,7 +45,7 @@ sequenceDiagram
     Note over Executor: Results Analysis
     Executor->>+Executor: analyze_results(result)
     Executor->>+Logger: print_section("WORKFLOW COMPLETED")
-    Logger-->>-Executor: ✅
+    Logger-->>-Executor: success
     
     Executor-->>-Main: workflow_result
     
@@ -53,7 +53,7 @@ sequenceDiagram
     alt Exception occurs
         Executor->>+ExceptionHandler: handle_*_error()
         ExceptionHandler->>+Logger: print_error()
-        Logger-->>-ExceptionHandler: ✅
+        Logger-->>-ExceptionHandler: success
         ExceptionHandler-->>-Executor: error_handled
     end
 ```
